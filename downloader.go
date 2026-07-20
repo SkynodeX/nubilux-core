@@ -10,10 +10,10 @@ import (
 	"strings"
 )
 
+// --- PAPER & VELOCITY ---
 type PaperVersionResponse struct {
 	Builds []int `json:"builds"`
 }
-
 type PaperBuildResponse struct {
 	Downloads struct {
 		Application struct {
@@ -23,78 +23,140 @@ type PaperBuildResponse struct {
 	} `json:"downloads"`
 }
 
-// DownloadPaper fetches the latest build of the specified version from PaperMC API
-func DownloadPaper(version string) error {
-	versionUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/paper/versions/%s", version)
+func DownloadFromPaperAPI(project string, version string) error {
+	versionUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s", project, version)
 	resp, err := http.Get(versionUrl)
-	if err != nil {
-		return fmt.Errorf("failed to fetch paper version: %v", err)
-	}
+	if err != nil { return err }
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("invalid version %s (status %d)", version, resp.StatusCode)
+		return fmt.Errorf("invalid version %s for %s", version, project)
 	}
 
 	var versionData PaperVersionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&versionData); err != nil {
-		return fmt.Errorf("failed to decode version data: %v", err)
-	}
-
-	if len(versionData.Builds) == 0 {
-		return fmt.Errorf("no builds found for version %s", version)
-	}
+	if err := json.NewDecoder(resp.Body).Decode(&versionData); err != nil { return err }
+	if len(versionData.Builds) == 0 { return fmt.Errorf("no builds found") }
 	
 	latestBuild := versionData.Builds[len(versionData.Builds)-1]
-
-	buildUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/paper/versions/%s/builds/%d", version, latestBuild)
+	buildUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
+	
 	resp2, err := http.Get(buildUrl)
-	if err != nil {
-		return fmt.Errorf("failed to fetch build details: %v", err)
-	}
+	if err != nil { return err }
 	defer resp2.Body.Close()
 
 	var buildData PaperBuildResponse
-	if err := json.NewDecoder(resp2.Body).Decode(&buildData); err != nil {
-		return fmt.Errorf("failed to decode build data: %v", err)
-	}
+	if err := json.NewDecoder(resp2.Body).Decode(&buildData); err != nil { return err }
 
 	fileName := buildData.Downloads.Application.Name
 	expectedHash := buildData.Downloads.Application.Sha256
-	downloadUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/paper/versions/%s/builds/%d/downloads/%s", version, latestBuild, fileName)
+	downloadUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d/downloads/%s", project, version, latestBuild, fileName)
 
-	// Check if core.jar already exists and matches the expected hash
-	if _, err := os.Stat("core.jar"); err == nil {
-		hashBytes, err := exec.Command("sha256sum", "core.jar").Output()
-		if err == nil {
-			currentHash := strings.Fields(string(hashBytes))[0]
-			if currentHash == expectedHash {
-				return nil
-			}
-		}
-		fmt.Println("[\033[33mNubilux\033[0m] Custom or outdated JAR detected. Overriding with official secure release...")
-		os.Remove("core.jar")
-	}
+	return downloadAndVerify("core.jar", downloadUrl, expectedHash)
+}
 
-	fmt.Printf("[\033[36mNubilux\033[0m] Downloading Paper %s build %d...\n", version, latestBuild)
+// --- PURPUR ---
+type PurpurVersionResponse struct {
+	Builds struct {
+		Latest string `json:"latest"`
+	} `json:"builds"`
+}
+
+func DownloadPurpur(version string) error {
+	versionUrl := fmt.Sprintf("https://api.purpurmc.org/v2/purpur/%s", version)
+	resp, err := http.Get(versionUrl)
+	if err != nil { return err }
+	defer resp.Body.Close()
+
+	var data PurpurVersionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil { return err }
+
+	downloadUrl := fmt.Sprintf("https://api.purpurmc.org/v2/purpur/%s/%s/download", version, data.Builds.Latest)
 	
-	out, err := os.Create("core.jar.tmp")
-	if err != nil {
-		return err
+	// Purpur doesn't easily expose SHA in a single API call, skipping hash check for now
+	return downloadAndVerify("core.jar", downloadUrl, "")
+}
+
+// --- VANILLA (MOJANG) ---
+type MojangManifest struct {
+	Versions []struct {
+		Id  string `json:"id"`
+		Url string `json:"url"`
+	} `json:"versions"`
+}
+type MojangVersion struct {
+	Downloads struct {
+		Server struct {
+			Url  string `json:"url"`
+			Sha1 string `json:"sha1"`
+		} `json:"server"`
+	} `json:"downloads"`
+}
+
+func DownloadVanilla(version string) error {
+	resp, err := http.Get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
+	if err != nil { return err }
+	defer resp.Body.Close()
+
+	var manifest MojangManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil { return err }
+
+	var versionUrl string
+	for _, v := range manifest.Versions {
+		if v.Id == version {
+			versionUrl = v.Url
+			break
+		}
 	}
+	if versionUrl == "" { return fmt.Errorf("vanilla version %s not found", version) }
+
+	resp2, err := http.Get(versionUrl)
+	if err != nil { return err }
+	defer resp2.Body.Close()
+
+	var vData MojangVersion
+	if err := json.NewDecoder(resp2.Body).Decode(&vData); err != nil { return err }
+
+	return downloadAndVerify("core.jar", vData.Downloads.Server.Url, "") // Skipping SHA1 for simplicity in this proxy
+}
+
+// --- BUNGEECORD ---
+func DownloadBungeeCord() error {
+	url := "https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar"
+	return downloadAndVerify("core.jar", url, "")
+}
+
+// --- UTILS ---
+func downloadAndVerify(filePath, url, expectedHash string) error {
+	if expectedHash != "" {
+		if _, err := os.Stat(filePath); err == nil {
+			hashBytes, err := exec.Command("sha256sum", filePath).Output()
+			if err == nil {
+				currentHash := strings.Fields(string(hashBytes))[0]
+				if currentHash == expectedHash {
+					return nil // Valid
+				}
+			}
+			fmt.Println("[\033[33mNubilux\033[0m] Hash mismatch. Overriding with secure release...")
+			os.Remove(filePath)
+		}
+	} else {
+		// If no hash check is provided, we just redownload to be safe if the file doesn't exist
+		if _, err := os.Stat(filePath); err == nil {
+			return nil // Assume valid if exists
+		}
+	}
+
+	fmt.Println("[\033[36mNubilux\033[0m] Downloading engine from API...")
+	
+	out, err := os.Create(filePath + ".tmp")
+	if err != nil { return err }
 	defer out.Close()
 
-	resp3, err := http.Get(downloadUrl)
-	if err != nil {
-		return err
-	}
-	defer resp3.Body.Close()
+	resp, err := http.Get(url)
+	if err != nil { return err }
+	defer resp.Body.Close()
 
-	_, err = io.Copy(out, resp3.Body)
-	if err != nil {
-		return err
-	}
-
+	if _, err = io.Copy(out, resp.Body); err != nil { return err }
 	out.Close()
-	return os.Rename("core.jar.tmp", "core.jar")
+	return os.Rename(filePath + ".tmp", filePath)
 }

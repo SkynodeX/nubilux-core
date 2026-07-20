@@ -44,13 +44,26 @@ func main() {
 	}
 
 	log.Printf("[\033[36mNubilux\033[0m] Verifying engine: %s %s", serverSoftware, minecraftVersion)
-	if strings.ToLower(serverSoftware) == "paper" {
-		err = DownloadPaper(minecraftVersion)
-		if err != nil {
-			log.Printf("[\033[33mWarning\033[0m] Engine download issue: %v", err)
-		}
-	} else {
+	
+	switch strings.ToLower(serverSoftware) {
+	case "paper":
+		err = DownloadFromPaperAPI("paper", minecraftVersion)
+	case "velocity":
+		err = DownloadFromPaperAPI("velocity", minecraftVersion)
+	case "waterfall":
+		err = DownloadFromPaperAPI("waterfall", minecraftVersion)
+	case "purpur":
+		err = DownloadPurpur(minecraftVersion)
+	case "vanilla":
+		err = DownloadVanilla(minecraftVersion)
+	case "bungeecord":
+		err = DownloadBungeeCord()
+	default:
 		log.Printf("[\033[33mWarning\033[0m] %s is not fully supported for auto-download yet. Assuming core.jar exists.", serverSoftware)
+	}
+
+	if err != nil {
+		log.Printf("[\033[31mError\033[0m] Engine download issue: %v", err)
 	}
 
 	// 4. Start Proxy / Hibernation Engine
