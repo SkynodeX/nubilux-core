@@ -1,0 +1,45 @@
+name: Build and Release Nubilux Core
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Binary
+        run: |
+          go mod init nubilux-core || true
+          go mod tidy || true
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o nubilux-core .
+
+      - name: Generate Release Tag
+        id: tag
+        run: echo "TAG_NAME=v1.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Release ${{ env.TAG_NAME }}"
+          files: nubilux-core
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
