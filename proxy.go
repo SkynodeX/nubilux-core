@@ -35,9 +35,13 @@ func startProxyEngine() {
 		log.Fatalf("[\033[31mError\033[0m] Failed to bind proxy to port %s: %v", serverPort, err)
 	}
 	log.Printf("[\033[36mNubilux Hibernation Proxy\033[0m] Listening on :%s", serverPort)
-	log.Printf("[\033[32mNubilux\033[0m] Server is hibernating to save resources! (0MB RAM)")
-	log.Printf("[\033[32mNubilux\033[0m] To wake up the server, simply connect to it in Minecraft.")
-	fmt.Println("Done (hibernating)") // Tells Pterodactyl the server has finished starting
+	
+	// Boot the server immediately so users can see the console start up
+	serverMutex.Lock()
+	if !isServerRunning {
+		runJavaServer()
+	}
+	serverMutex.Unlock()
 
 	// Background idle checker
 	go func() {
