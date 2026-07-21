@@ -11,21 +11,34 @@ import (
 )
 
 // --- PAPER & VELOCITY ---
-type PaperVersionResponse struct {
+type PaperVersionBuildsResponse struct {
 	Builds []int `json:"builds"`
 }
 type PaperBuildResponse struct {
 	Downloads struct {
-		Application struct {
-			Name   string `json:"name"`
-			Sha256 string `json:"sha256"`
-		} `json:"application"`
+		ServerDefault struct {
+			Name      string `json:"name"`
+			Url       string `json:"url"`
+			Checksums struct {
+				Sha256 string `json:"sha256"`
+			} `json:"checksums"`
+		} `json:"server:default"`
 	} `json:"downloads"`
 }
 
+func httpGetWithUA(url string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Nubilux-Core/1.0 (contact@nubilux.com)")
+	client := &http.Client{}
+	return client.Do(req)
+}
+
 func DownloadFromPaperAPI(project string, version string) error {
-	versionUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s", project, version)
-	resp, err := http.Get(versionUrl)
+	versionUrl := fmt.Sprintf("https://fill.papermc.io/v3/projects/%s/versions/%s", project, version)
+	resp, err := httpGetWithUA(versionUrl)
 	if err != nil { return err }
 	defer resp.Body.Close()
 
@@ -33,23 +46,26 @@ func DownloadFromPaperAPI(project string, version string) error {
 		return fmt.Errorf("invalid version %s for %s", version, project)
 	}
 
-	var versionData PaperVersionResponse
+	var versionData PaperVersionBuildsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&versionData); err != nil { return err }
 	if len(versionData.Builds) == 0 { return fmt.Errorf("no builds found") }
 	
-	latestBuild := versionData.Builds[len(versionData.Builds)-1]
-	buildUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
+	latestBuild := versionData.Builds[0] // v3 sorts builds descending by default
+	buildUrl := fmt.Sprintf("https://fill.papermc.io/v3/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
 	
-	resp2, err := http.Get(buildUrl)
+	resp2, err := httpGetWithUA(buildUrl)
 	if err != nil { return err }
 	defer resp2.Body.Close()
 
 	var buildData PaperBuildResponse
 	if err := json.NewDecoder(resp2.Body).Decode(&buildData); err != nil { return err }
 
-	fileName := buildData.Downloads.Application.Name
-	expectedHash := buildData.Downloads.Application.Sha256
-	downloadUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d/downloads/%s", project, version, latestBuild, fileName)
+	expectedHash := buildData.Downloads.ServerDefault.Checksums.Sha256
+	downloadUrl := buildData.Downloads.ServerDefault.Url
+
+	if downloadUrl == "" {
+		return fmt.Errorf("failed to get download URL from paper v3 API")
+	}
 
 	return downloadAndVerify("core.jar", downloadUrl, expectedHash)
 }
@@ -152,7 +168,7 @@ func downloadAndVerify(filePath, url, expectedHash string) error {
 	if err != nil { return err }
 	defer out.Close()
 
-	resp, err := http.Get(url)
+	resp, err := httpGetWithUA(url)
 	if err != nil { return err }
 	defer resp.Body.Close()
 
