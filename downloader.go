@@ -138,6 +138,32 @@ func DownloadBungeeCord() error {
 }
 
 // --- UTILS ---
+type progressWriter struct {
+	Total      int64
+	Downloaded int64
+	LastPct    int
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.Downloaded += int64(n)
+	if pw.Total > 0 {
+		pct := int(float64(pw.Downloaded) / float64(pw.Total) * 100)
+		// Print every 10%
+		if pct >= pw.LastPct+10 {
+			fmt.Printf("[\033[36mNubilux\033[0m] Downloading: %d%%\n", pct)
+			pw.LastPct = pct
+		}
+	} else {
+		mb := int(pw.Downloaded / 1024 / 1024)
+		if mb >= pw.LastPct+5 { // Print every 5MB
+			fmt.Printf("[\033[36mNubilux\033[0m] Downloading: %d MB...\n", mb)
+			pw.LastPct = mb
+		}
+	}
+	return n, nil
+}
+
 func downloadAndVerify(filePath, url, expectedHash string) error {
 	if expectedHash != "" {
 		if _, err := os.Stat(filePath); err == nil {
@@ -168,7 +194,12 @@ func downloadAndVerify(filePath, url, expectedHash string) error {
 	if err != nil { return err }
 	defer resp.Body.Close()
 
-	if _, err = io.Copy(out, resp.Body); err != nil { return err }
+	pw := &progressWriter{Total: resp.ContentLength}
+	reader := io.TeeReader(resp.Body, pw)
+
+	if _, err = io.Copy(out, reader); err != nil { return err }
+	fmt.Println("[\033[36mNubilux\033[0m] Download complete.")
+
 	out.Close()
 	return os.Rename(filePath + ".tmp", filePath)
 }
