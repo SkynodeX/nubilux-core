@@ -16,13 +16,10 @@ type PaperVersionBuildsResponse struct {
 }
 type PaperBuildResponse struct {
 	Downloads struct {
-		ServerDefault struct {
-			Name      string `json:"name"`
-			Url       string `json:"url"`
-			Checksums struct {
-				Sha256 string `json:"sha256"`
-			} `json:"checksums"`
-		} `json:"server:default"`
+		Application struct {
+			Name   string `json:"name"`
+			Sha256 string `json:"sha256"`
+		} `json:"application"`
 	} `json:"downloads"`
 }
 
@@ -37,7 +34,7 @@ func httpGetWithUA(url string) (*http.Response, error) {
 }
 
 func DownloadFromPaperAPI(project string, version string) error {
-	versionUrl := fmt.Sprintf("https://fill.papermc.io/v3/projects/%s/versions/%s", project, version)
+	versionUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s", project, version)
 	resp, err := httpGetWithUA(versionUrl)
 	if err != nil { return err }
 	defer resp.Body.Close()
@@ -50,8 +47,9 @@ func DownloadFromPaperAPI(project string, version string) error {
 	if err := json.NewDecoder(resp.Body).Decode(&versionData); err != nil { return err }
 	if len(versionData.Builds) == 0 { return fmt.Errorf("no builds found") }
 	
-	latestBuild := versionData.Builds[0] // v3 sorts builds descending by default
-	buildUrl := fmt.Sprintf("https://fill.papermc.io/v3/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
+	// v2 API sorts builds ascending (latest is last)
+	latestBuild := versionData.Builds[len(versionData.Builds)-1]
+	buildUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
 	
 	resp2, err := httpGetWithUA(buildUrl)
 	if err != nil { return err }
@@ -60,13 +58,14 @@ func DownloadFromPaperAPI(project string, version string) error {
 	var buildData PaperBuildResponse
 	if err := json.NewDecoder(resp2.Body).Decode(&buildData); err != nil { return err }
 
-	expectedHash := buildData.Downloads.ServerDefault.Checksums.Sha256
-	downloadUrl := buildData.Downloads.ServerDefault.Url
+	jarName := buildData.Downloads.Application.Name
+	expectedHash := buildData.Downloads.Application.Sha256
 
-	if downloadUrl == "" {
-		return fmt.Errorf("failed to get download URL from paper v3 API")
+	if jarName == "" {
+		return fmt.Errorf("failed to get jar name from paper v2 API")
 	}
 
+	downloadUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d/downloads/%s", project, version, latestBuild, jarName)
 	return downloadAndVerify("core.jar", downloadUrl, expectedHash)
 }
 
