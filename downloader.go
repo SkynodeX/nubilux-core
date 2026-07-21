@@ -11,15 +11,16 @@ import (
 )
 
 // --- PAPER & VELOCITY ---
-type PaperVersionBuildsResponse struct {
-	Builds []int `json:"builds"`
-}
-type PaperBuildResponse struct {
+type PaperV3Build struct {
+	Id        int `json:"id"`
 	Downloads struct {
-		Application struct {
-			Name   string `json:"name"`
-			Sha256 string `json:"sha256"`
-		} `json:"application"`
+		ServerDefault struct {
+			Name      string `json:"name"`
+			Checksums struct {
+				Sha256 string `json:"sha256"`
+			} `json:"checksums"`
+			Url string `json:"url"`
+		} `json:"server:default"`
 	} `json:"downloads"`
 }
 
@@ -34,8 +35,8 @@ func httpGetWithUA(url string) (*http.Response, error) {
 }
 
 func DownloadFromPaperAPI(project string, version string) error {
-	versionUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s", project, version)
-	resp, err := httpGetWithUA(versionUrl)
+	buildsUrl := fmt.Sprintf("https://fill.papermc.io/v3/projects/%s/versions/%s/builds", project, version)
+	resp, err := httpGetWithUA(buildsUrl)
 	if err != nil { return err }
 	defer resp.Body.Close()
 
@@ -43,29 +44,25 @@ func DownloadFromPaperAPI(project string, version string) error {
 		return fmt.Errorf("invalid version %s for %s", version, project)
 	}
 
-	var versionData PaperVersionBuildsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&versionData); err != nil { return err }
-	if len(versionData.Builds) == 0 { return fmt.Errorf("no builds found") }
+	var buildsData []PaperV3Build
+	if err := json.NewDecoder(resp.Body).Decode(&buildsData); err != nil { return err }
+	if len(buildsData) == 0 { return fmt.Errorf("no builds found") }
 	
-	// v2 API sorts builds ascending (latest is last)
-	latestBuild := versionData.Builds[len(versionData.Builds)-1]
-	buildUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d", project, version, latestBuild)
-	
-	resp2, err := httpGetWithUA(buildUrl)
-	if err != nil { return err }
-	defer resp2.Body.Close()
-
-	var buildData PaperBuildResponse
-	if err := json.NewDecoder(resp2.Body).Decode(&buildData); err != nil { return err }
-
-	jarName := buildData.Downloads.Application.Name
-	expectedHash := buildData.Downloads.Application.Sha256
-
-	if jarName == "" {
-		return fmt.Errorf("failed to get jar name from paper v2 API")
+	// The first build in the array is typically the latest, but we can loop to find max ID
+	latestBuild := buildsData[0]
+	for _, b := range buildsData {
+		if b.Id > latestBuild.Id {
+			latestBuild = b
+		}
 	}
 
-	downloadUrl := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d/downloads/%s", project, version, latestBuild, jarName)
+	downloadUrl := latestBuild.Downloads.ServerDefault.Url
+	expectedHash := latestBuild.Downloads.ServerDefault.Checksums.Sha256
+
+	if downloadUrl == "" {
+		return fmt.Errorf("failed to get download URL from paper v3 API")
+	}
+
 	return downloadAndVerify("core.jar", downloadUrl, expectedHash)
 }
 
